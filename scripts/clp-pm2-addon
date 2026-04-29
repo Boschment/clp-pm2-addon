@@ -30,7 +30,10 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $1"; }
 
 check_root() {
-    [ "$EUID" -ne 0 ] && { log_err "Run as root."; exit 1; }
+    if [ "$EUID" -ne 0 ]; then
+        log_err "This script must be run as root."
+        exit 1
+    fi
 }
 
 is_patched() {
