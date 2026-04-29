@@ -1,0 +1,207 @@
+#!/bin/bash
+# clp-pm2-helper <action> <domain> <siteUser> <siteRoot> [args...]
+#
+# Single sudo-allowed entry point for the web UI. Runs as root, drops to
+# the site user (via sudo -u with login shell so nvm shims load) for any
+# pm2 invocation.
+#
+# Actions:
+#   status   <domain> <user> <root>           -> JSON of pm2 procs under root
+#   start    <domain> <user> <root>           -> pm2 start <data>/<domain>/ecosystem.config.js
+#   stop     <domain> <user> <root>           -> pm2 stop  matching procs
+#   restart  <domain> <user> <root>           -> pm2 restart matching procs (--update-env)
+#   ensure-pm2 <user>                         -> install pm2 in user's nvm if missing
+
+set -u
+
+ACTION="${1:-}"
+ADDON_DATA="/opt/clp-pm2-addon/data"
+
+die() { echo "$1" >&2; exit "${2:-2}"; }
+
+run_as_user() {
+    # $1 = user, $2 = command string
+    sudo -u "$1" -H bash -lc "$2"
+}
+
+validate_user() {
+    case "$1" in *..*|*/*|"") die "bad user";; esac
+    id -u "$1" >/dev/null 2>&1 || die "unknown user $1"
+}
+validate_domain() {
+    case "$1" in *..*|*/*|"") die "bad domain";; esac
+}
+validate_root() {
+    case "$1" in /home/*) ;; *) die "bad root";; esac
+    [ -d "$1" ] || die "root not a directory"
+}
+
+list_apps_for_root() {
+    # echoes app names whose pm_cwd is under SITE_ROOT
+    local user="$1" root="$2"
+    local json
+    json="$(run_as_user "$user" 'pm2 jlist' 2>/dev/null || true)"
+    [ -z "$json" ] && return 0
+    [ "$json" = "[]" ] && return 0
+    python3 - "$root" <<PYEOF
+import json, sys
+root = sys.argv[1].rstrip('/') + '/'
+try: procs = json.loads(sys.stdin.read())
+except Exception: sys.exit(0)
+seen = set()
+for p in procs:
+    cwd = (p.get('pm2_env', {}) or {}).get('pm_cwd') or ''
+    n = p.get('name')
+    if n and (cwd + '/').startswith(root) and n not in seen:
+        print(n); seen.add(n)
+PYEOF
+<<< "$json"
+}
+
+case "$ACTION" in
+    ensure-pm2)
+        USER_NAME="${2:-}"
+        validate_user "$USER_NAME"
+        HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+        [ -z "$HOME_DIR" ] && HOME_DIR="/home/$USER_NAME"
+
+        if ! run_as_user "$USER_NAME" 'command -v pm2 >/dev/null 2>&1'; then
+            if ! run_as_user "$USER_NAME" 'command -v npm >/dev/null 2>&1'; then
+                echo "npm not available for $USER_NAME (no node installed?); skipping" >&2
+                exit 3
+            fi
+            run_as_user "$USER_NAME" 'npm install -g pm2 >/dev/null 2>&1 || true'
+            echo "pm2 installed for $USER_NAME"
+        else
+            echo "pm2 already installed for $USER_NAME"
+        fi
+
+        # Register a systemd startup unit so PM2 restores its dump on reboot.
+        # We always (re)run this — it's idempotent and ensures the unit is
+        # present even if pm2 was installed manually before this script ran.
+        UNIT="/etc/systemd/system/pm2-${USER_NAME}.service"
+        if [ ! -f "$UNIT" ]; then
+            # `pm2 startup` prints the exact `sudo env PATH=... pm2 startup ...`
+            # command tailored for this user's nvm/node prefix. Capture it,
+            # strip the leading `sudo `, then execute as root.
+            STARTUP_CMD="$(run_as_user "$USER_NAME" "pm2 startup systemd -u $(printf %q "$USER_NAME") --hp $(printf %q "$HOME_DIR")" 2>&1 \
+                | grep -oE 'sudo env[[:space:]].*' | head -1)"
+            if [ -n "$STARTUP_CMD" ]; then
+                # Drop the leading `sudo ` — we are already root.
+                eval "${STARTUP_CMD#sudo }" >/dev/null 2>&1 || true
+            fi
+            if [ -f "$UNIT" ]; then
+                systemctl enable "pm2-${USER_NAME}.service" >/dev/null 2>&1 || true
+                echo "pm2 startup unit installed at $UNIT"
+            else
+                echo "warning: could not install pm2 startup unit for $USER_NAME" >&2
+            fi
+        fi
+        ;;
+
+    status)
+        DOMAIN="${2:-}"; USER_NAME="${3:-}"; ROOT="${4:-}"
+        validate_domain "$DOMAIN"; validate_user "$USER_NAME"; validate_root "$ROOT"
+
+        json="$(run_as_user "$USER_NAME" 'pm2 jlist' 2>/dev/null || echo '[]')"
+        [ -z "$json" ] && json='[]'
+        # Filter to apps whose cwd is under site root.
+        python3 - "$ROOT" <<PYEOF
+import json, sys
+root = sys.argv[1].rstrip('/') + '/'
+try: procs = json.loads(sys.stdin.read())
+except Exception: procs = []
+out = []
+for p in procs:
+    pe = p.get('pm2_env', {}) or {}
+    cwd = pe.get('pm_cwd') or ''
+    if not (cwd + '/').startswith(root): continue
+    out.append({
+        'name':    p.get('name'),
+        'pm_id':   p.get('pm_id'),
+        'pid':     p.get('pid'),
+        'status':  pe.get('status'),
+        'restarts':pe.get('restart_time'),
+        'uptime_ms': (__import__('time').time()*1000 - pe.get('pm_uptime', 0)) if pe.get('status') == 'online' else None,
+        'cpu':     (p.get('monit', {}) or {}).get('cpu'),
+        'memory':  (p.get('monit', {}) or {}).get('memory'),
+        'cwd':     cwd,
+        'script':  pe.get('pm_exec_path'),
+    })
+print(json.dumps(out))
+PYEOF
+<<< "$json"
+        ;;
+
+    start)
+        DOMAIN="${2:-}"; USER_NAME="${3:-}"; ROOT="${4:-}"
+        validate_domain "$DOMAIN"; validate_user "$USER_NAME"; validate_root "$ROOT"
+
+        ECO_DIR="$ADDON_DATA/$DOMAIN"
+        ECO_FILE="$ECO_DIR/ecosystem.config.js"
+        [ -f "$ECO_FILE" ] || die "no ecosystem config saved yet" 4
+
+        # Ensure pm2 is present.
+        if ! run_as_user "$USER_NAME" 'command -v pm2 >/dev/null 2>&1'; then
+            "$0" ensure-pm2 "$USER_NAME" || die "could not ensure pm2" 5
+        fi
+
+        # Run pm2 from inside the site root so relative paths in eco config resolve.
+        run_as_user "$USER_NAME" "cd $(printf %q "$ROOT") && pm2 start $(printf %q "$ECO_FILE") && pm2 save >/dev/null 2>&1 || true"
+        ;;
+
+    stop)
+        DOMAIN="${2:-}"; USER_NAME="${3:-}"; ROOT="${4:-}"
+        validate_domain "$DOMAIN"; validate_user "$USER_NAME"; validate_root "$ROOT"
+        apps="$(list_apps_for_root "$USER_NAME" "$ROOT")"
+        [ -z "$apps" ] && exit 0
+        while IFS= read -r app; do
+            [ -z "$app" ] && continue
+            run_as_user "$USER_NAME" "pm2 stop $(printf %q "$app") >/dev/null 2>&1 || true"
+        done <<< "$apps"
+        run_as_user "$USER_NAME" 'pm2 save >/dev/null 2>&1 || true'
+        ;;
+
+    restart)
+        DOMAIN="${2:-}"; USER_NAME="${3:-}"; ROOT="${4:-}"
+        validate_domain "$DOMAIN"; validate_user "$USER_NAME"; validate_root "$ROOT"
+        apps="$(list_apps_for_root "$USER_NAME" "$ROOT")"
+        [ -z "$apps" ] && die "no running apps to restart" 6
+        while IFS= read -r app; do
+            [ -z "$app" ] && continue
+            run_as_user "$USER_NAME" "pm2 restart $(printf %q "$app") --update-env >/dev/null 2>&1 || true"
+        done <<< "$apps"
+        ;;
+
+    list-users)
+        # list-users <siteRoot>
+        # Prints JSON array of users that can access the site dir: the owner
+        # plus every member of the dir's primary group (these are the only
+        # users that can usefully run a pm2 process for this site).
+        ROOT="${2:-}"
+        validate_root "$ROOT"
+        OWNER="$(stat -c %U "$ROOT")"
+        GROUP="$(stat -c %G "$ROOT")"
+        python3 - "$OWNER" "$GROUP" <<'PYEOF'
+import json, sys, pwd, grp
+owner, group = sys.argv[1], sys.argv[2]
+users = {owner}
+try:
+    users.update(grp.getgrnam(group).gr_mem)
+except KeyError:
+    pass
+out = []
+for u in sorted(users):
+    try:
+        ent = pwd.getpwnam(u)
+        out.append({'name': u, 'uid': ent.pw_uid, 'home': ent.pw_dir})
+    except KeyError:
+        continue
+print(json.dumps(out))
+PYEOF
+        ;;
+
+    *)
+        die "unknown action: $ACTION"
+        ;;
+esac

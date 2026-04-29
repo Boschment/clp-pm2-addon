@@ -1,0 +1,15 @@
+.pm2-eco-textarea {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: pre;
+    overflow-x: auto;
+    background: #f8f9fa;
+}
+
+.table-pm2-status td,
+.table-pm2-status th {
+    vertical-align: middle;
+}
+
+.pm2-actions form { margin-left: 6px; }

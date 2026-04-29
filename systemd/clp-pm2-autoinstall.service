@@ -1,0 +1,7 @@
+[Unit]
+Description=Auto-install PM2 for newly created CloudPanel Node.js sites
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/clp-pm2-autoinstall
+Nice=10

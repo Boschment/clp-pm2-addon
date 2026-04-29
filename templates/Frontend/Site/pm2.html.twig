@@ -1,0 +1,158 @@
+{% extends 'Frontend/layout.html.twig' %}
+
+{% block pageTitle %}{% trans %}PM2{% endtrans %}{% endblock %}
+
+{%- block stylesheets -%}
+  {{ parent() }}
+  <link href="{{ asset('/assets/css/frontend/site.css') }}" rel="stylesheet">
+  <link href="{{ asset('/assets/css/frontend/pm2.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid container-limited-width">
+  <div class="site-container">
+    {{ include('Frontend/Site/Partial/site-info.html.twig', {'site': site}) }}
+    <div class="site-content-container">
+      {{ include('Frontend/Site/Partial/tab-container.html.twig', {'active': 'pm2', 'site': site}) }}
+      {{ include('Partial/flash-messages.html.twig', { 'flashBagMessages': app.session.flashbag.all }) }}
+      <div class="site-content">
+
+        <div class="card">
+          <div class="card-header">{% trans %}PM2 User{% endtrans %}</div>
+          <div class="card-body">
+            <form method="post" action="{{ path('clp_site_pm2_save_user', {'domainName': site.domainName}) }}?token={{ csrf_token('pm2-save-user') }}" class="row g-2 align-items-end">
+              <div class="col-md-6">
+                <label class="form-label" for="pm2-runtime-user">{% trans %}Run PM2 as{% endtrans %}</label>
+                <select name="runtime_user" id="pm2-runtime-user" class="form-control">
+                  {% for u in allowedUsers %}
+                    <option value="{{ u.name }}" {% if u.name == runtimeUser %}selected{% endif %}>
+                      {{ u.name }}{% if u.name == siteUser %} ({% trans %}site owner{% endtrans %}){% endif %}
+                    </option>
+                  {% endfor %}
+                </select>
+                <div class="form-text">
+                  {% trans %}Choose which Linux user runs the PM2 process. Only users that own or are in the group of the site directory are listed (deploy users etc.). Saving installs PM2 + the systemd startup unit for the chosen user.{% endtrans %}
+                </div>
+              </div>
+              <div class="col-md-2">
+                <button type="submit" class="btn btn-blue w-100" {% if isRunning %}disabled title="{% trans %}Stop the running app first{% endtrans %}"{% endif %}>{% trans %}Save{% endtrans %}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>{% trans %}Status{% endtrans %} <small class="text-muted ms-2">{% trans %}as{% endtrans %} <code>{{ runtimeUser }}</code></small></span>
+            <div class="pm2-actions">
+              {% if isRunning %}
+                <form method="post" action="{{ path('clp_site_pm2_restart', {'domainName': site.domainName}) }}?token={{ csrf_token('pm2-restart') }}" class="d-inline">
+                  <button type="submit" class="btn btn-blue btn-sm">{% trans %}Restart{% endtrans %}</button>
+                </form>
+                <form method="post" action="{{ path('clp_site_pm2_stop', {'domainName': site.domainName}) }}?token={{ csrf_token('pm2-stop') }}" class="d-inline" onsubmit="return confirm('{% trans %}Stop the running app?{% endtrans %}');">
+                  <button type="submit" class="btn btn-outline-danger btn-sm">{% trans %}Stop{% endtrans %}</button>
+                </form>
+              {% else %}
+                <form method="post" action="{{ path('clp_site_pm2_start', {'domainName': site.domainName}) }}?token={{ csrf_token('pm2-start') }}" class="d-inline">
+                  <button type="submit" class="btn btn-green btn-sm" {% if not configSaved %}disabled title="{% trans %}Save the ecosystem config first{% endtrans %}"{% endif %}>{% trans %}Start{% endtrans %}</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+          <div class="card-body card-body-no-padding">
+            {% if procs is empty %}
+              <p class="text-muted p-3 mb-0">
+                {% if configSaved %}
+                  {% trans %}No PM2 processes for this site yet. Click Start to launch the ecosystem config.{% endtrans %}
+                {% else %}
+                  {% trans %}Save an ecosystem config below, then click Start.{% endtrans %}
+                {% endif %}
+              </p>
+            {% else %}
+              <table class="table table-pm2-status mb-0">
+                <thead>
+                  <tr>
+                    <th>{% trans %}Name{% endtrans %}</th>
+                    <th>{% trans %}Status{% endtrans %}</th>
+                    <th>{% trans %}PID{% endtrans %}</th>
+                    <th>{% trans %}CPU{% endtrans %}</th>
+                    <th>{% trans %}Memory{% endtrans %}</th>
+                    <th>{% trans %}Restarts{% endtrans %}</th>
+                    <th>{% trans %}Uptime{% endtrans %}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for p in procs %}
+                    <tr>
+                      <td><code>{{ p.name }}</code></td>
+                      <td>
+                        {% if p.status == 'online' %}
+                          <span class="badge bg-success">{{ p.status }}</span>
+                        {% elseif p.status in ['stopped','errored'] %}
+                          <span class="badge bg-danger">{{ p.status }}</span>
+                        {% else %}
+                          <span class="badge bg-secondary">{{ p.status }}</span>
+                        {% endif %}
+                      </td>
+                      <td>{{ p.pid ?: '-' }}</td>
+                      <td>{{ p.cpu is not null ? p.cpu ~ '%' : '-' }}</td>
+                      <td>{{ p.memory ? (p.memory / 1024 / 1024)|round(1) ~ ' MB' : '-' }}</td>
+                      <td>{{ p.restarts ?? 0 }}</td>
+                      <td>
+                        {% if p.uptime_ms %}
+                          {% set s = (p.uptime_ms / 1000)|round %}
+                          {% if s < 60 %}{{ s }}s
+                          {% elseif s < 3600 %}{{ (s / 60)|round }}m
+                          {% elseif s < 86400 %}{{ (s / 3600)|round(1) }}h
+                          {% else %}{{ (s / 86400)|round(1) }}d
+                          {% endif %}
+                        {% else %}-{% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">{% trans %}Ecosystem Config{% endtrans %}</div>
+          <div class="card-body">
+            <form method="post" action="{{ path('clp_site_pm2_save_config', {'domainName': site.domainName}) }}?token={{ csrf_token('pm2-save-config') }}">
+              <textarea name="config" class="form-control pm2-eco-textarea" rows="20" spellcheck="false" autocomplete="off">{{ config }}</textarea>
+              <div class="form-text mt-1">
+                {% trans %}Stored at{% endtrans %} <code>/opt/clp-pm2-addon/data/{{ site.domainName }}/ecosystem.config.js</code> {% trans %}(owned by site user, mode 600). Not written into the site directory.{% endtrans %}
+              </div>
+              <div class="mt-2">
+                <button type="submit" class="btn btn-blue">{% trans %}Save Config{% endtrans %}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+  {{ parent() }}
+  <script type="text/javascript">
+  // Lightweight live-status polling so badges/CPU/memory update without a reload.
+  jQuery(document).ready(function() {
+    var url = "{{ path('clp_site_pm2_status', {'domainName': site.domainName}) }}";
+    var lastRunning = {{ isRunning ? 'true' : 'false' }};
+    setInterval(function() {
+      jQuery.getJSON(url).done(function(data) {
+        // If running-state flips, reload so the Start/Stop buttons swap.
+        if (data.isRunning !== lastRunning) {
+          location.reload();
+          return;
+        }
+      });
+    }, 5000);
+  });
+  </script>
+{% endblock %}

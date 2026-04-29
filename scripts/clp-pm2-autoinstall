@@ -1,0 +1,39 @@
+#!/bin/bash
+# clp-pm2-autoinstall
+# Triggered by /etc/systemd/system/clp-pm2-autoinstall.path whenever
+# /etc/nginx/sites-enabled/ changes. Scans for Node.js sites and ensures
+# pm2 is installed in each site user's nvm.
+#
+# A "Node.js site" is identified by the vhost containing `proxy_pass` AND
+# the site user not having any PHP-FPM pool. This avoids accidentally
+# treating a reverse-proxy PHP site as a node site.
+
+set -u
+SITES_DIR="/etc/nginx/sites-enabled"
+[ -d "$SITES_DIR" ] || exit 0
+
+shopt -s nullglob
+for vhost in "$SITES_DIR"/*.conf; do
+    domain="$(basename "$vhost" .conf)"
+
+    # Quick skip: not a reverse-proxy style vhost
+    grep -q 'proxy_pass' "$vhost" 2>/dev/null || continue
+
+    # Find site root and owning user
+    site_root=""
+    for candidate in /home/*/htdocs/"$domain"; do
+        [ -d "$candidate" ] && { site_root="$candidate"; break; }
+    done
+    [ -z "$site_root" ] && continue
+
+    site_user="$(stat -c %U "$site_root" 2>/dev/null || true)"
+    [ -z "$site_user" ] && continue
+
+    # Skip if a PHP-FPM pool exists for this user (it's a PHP site that
+    # happens to have a proxy_pass — like to PHP-FPM upstream).
+    if compgen -G "/etc/php/*/fpm/pool.d/${site_user}.conf" >/dev/null; then
+        continue
+    fi
+
+    /usr/local/bin/clp-pm2-helper ensure-pm2 "$site_user" >/dev/null 2>&1 || true
+done

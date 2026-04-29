@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch nginx sites-enabled for new CloudPanel sites (PM2 auto-install)
+
+[Path]
+PathChanged=/etc/nginx/sites-enabled
+Unit=clp-pm2-autoinstall.service
+
+[Install]
+WantedBy=multi-user.target
