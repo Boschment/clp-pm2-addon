@@ -175,10 +175,14 @@ PYEOF
 
     find-root)
         # find-root <domain>
-        # Prints the absolute path of /home/<user>/htdocs/<domain>, or nothing.
+        # Prints "<siteRoot>\t<siteUser>" or nothing if not found.
         DOMAIN="${2:-}"
         validate_domain "$DOMAIN"
-        find /home -maxdepth 3 -type d -path "*/htdocs/$DOMAIN" 2>/dev/null | head -1
+        ROOT="$(find /home -maxdepth 3 -type d -path "*/htdocs/$DOMAIN" 2>/dev/null | head -1)"
+        [ -z "$ROOT" ] && exit 3
+        OWNER="$(stat -c %U "$ROOT" 2>/dev/null)"
+        [ -z "$OWNER" ] && exit 3
+        printf '%s\t%s\n' "$ROOT" "$OWNER"
         ;;
 
     list-users)

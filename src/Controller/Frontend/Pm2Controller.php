@@ -184,14 +184,14 @@ class Pm2Controller extends Controller
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
-        $siteRoot = trim($this->callHelper('find-root', [$domainName]));
-        if ('' === $siteRoot) {
-            $this->addFlash('error', '[PM2] Site directory not found at /home/*/htdocs/' . $domainName);
+        $findOut = trim($this->callHelper('find-root', [$domainName]));
+        if ('' === $findOut) {
+            $this->addFlash('error', '[PM2] Site directory not found for: ' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
-        $siteUser = trim((string) shell_exec('stat -c %U ' . escapeshellarg($siteRoot)));
-        if ('' === $siteUser) {
-            $this->addFlash('error', '[PM2] Could not determine site owner for: ' . $siteRoot);
+        [$siteRoot, $siteUser] = explode("\t", $findOut, 2) + [1 => ''];
+        if ('' === $siteRoot || '' === $siteUser) {
+            $this->addFlash('error', '[PM2] Could not resolve site root/owner for: ' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
