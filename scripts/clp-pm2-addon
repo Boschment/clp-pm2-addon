@@ -38,11 +38,11 @@ check_root() {
 
 is_patched() {
     grep -q "clp_site_pm2" "$CLP_ROUTES" 2>/dev/null && \
-    grep -q "clp_site_pm2" "$TAB_TEMPLATE" 2>/dev/null
+    grep -q "clp-pm2-addon:start" "$TAB_TEMPLATE" 2>/dev/null
 }
 
 patch_tab_container() {
-    if grep -q "clp_site_pm2" "$TAB_TEMPLATE" 2>/dev/null; then
+    if grep -q "clp-pm2-addon:start" "$TAB_TEMPLATE" 2>/dev/null; then
         log_ok "PM2 tab already present"
         return 0
     fi
@@ -54,7 +54,8 @@ patch_tab_container() {
 import sys, re
 path = sys.argv[1]
 with open(path) as f: src = f.read()
-snippet = """    {% set _clpPm2Type = '' %}
+snippet = """{# clp-pm2-addon:start #}
+    {% set _clpPm2Type = '' %}
     {% if site.type is defined %}{% set _clpPm2Type = site.type %}{% endif %}
     {% if _clpPm2Type == '' and site.siteType is defined %}{% set _clpPm2Type = site.siteType %}{% endif %}
     {% if _clpPm2Type == '' and site.application is defined %}{% set _clpPm2Type = site.application %}{% endif %}
@@ -63,6 +64,7 @@ snippet = """    {% set _clpPm2Type = '' %}
       <a href="{{ path('clp_site_pm2', {'domainName': site.domainName}) }}">{% trans %}PM2{% endtrans %}</a>
     </li>
     {% endif %}
+{# clp-pm2-addon:end #}
 """
 new = re.sub(r'(\s*</ul>)', '\n' + snippet + r'\1', src, count=1)
 with open(path, 'w') as f: f.write(new)
@@ -257,13 +259,11 @@ cmd_uninstall() {
     rm -f "$CLP_CONTROLLERS/Pm2Controller.php" "$CLP_TEMPLATES/pm2.html.twig" "$CLP_CSS/pm2.css"
 
     sed -i '/# CloudPanel PM2 Addon/,/^$/d' "$CLP_ROUTES" 2>/dev/null || true
-    # Remove our injected tab block (between marker comments would be cleaner;
-    # match by content here).
     python3 - "$TAB_TEMPLATE" << 'PYEOF' 2>/dev/null || true
 import sys, re
 p = sys.argv[1]
 src = open(p).read()
-src = re.sub(r"\n\s*\{% set _clpPm2Type.*?\{% endif %\}\n", "\n", src, flags=re.S)
+src = re.sub(r"\n?\s*\{#\s*clp-pm2-addon:start\s*#\}.*?\{#\s*clp-pm2-addon:end\s*#\}\n?", "\n", src, flags=re.S)
 open(p, 'w').write(src)
 PYEOF
 
