@@ -175,20 +175,24 @@ class Pm2Controller extends Controller
     {
         $site = $this->siteEntityManager->findOneByDomainName($domainName);
         if (null === $site) {
+            $this->addFlash('error', '[PM2] Site not found: ' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
         if (!preg_match('/^[A-Za-z0-9._-]+$/', $domainName)) {
+            $this->addFlash('error', '[PM2] Invalid domain name: ' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
         $matches = glob('/home/*/htdocs/' . $domainName);
         if (!$matches || !is_dir($matches[0])) {
+            $this->addFlash('error', '[PM2] Site directory not found at /home/*/htdocs/' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
         $siteRoot = $matches[0];
         $siteUser = trim((string) shell_exec('stat -c %U ' . escapeshellarg($siteRoot)));
         if ('' === $siteUser) {
+            $this->addFlash('error', '[PM2] Could not determine site owner for: ' . $siteRoot);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
