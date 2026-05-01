@@ -173,6 +173,14 @@ PYEOF
         done <<< "$apps"
         ;;
 
+    find-root)
+        # find-root <domain>
+        # Prints the absolute path of /home/<user>/htdocs/<domain>, or nothing.
+        DOMAIN="${2:-}"
+        validate_domain "$DOMAIN"
+        find /home -maxdepth 3 -type d -path "*/htdocs/$DOMAIN" 2>/dev/null | head -1
+        ;;
+
     list-users)
         # list-users <siteRoot>
         # Prints JSON array of users that can access the site dir: the owner

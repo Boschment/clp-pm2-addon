@@ -184,10 +184,8 @@ class Pm2Controller extends Controller
             return $this->redirect($this->generateUrl('clp_sites'));
         }
 
-        $siteRoot = trim((string) shell_exec(
-            'sudo find /home -maxdepth 3 -type d -path ' . escapeshellarg('*/htdocs/' . $domainName) . ' 2>/dev/null | head -1'
-        ));
-        if ('' === $siteRoot || !is_dir($siteRoot)) {
+        $siteRoot = trim($this->callHelper('find-root', [$domainName]));
+        if ('' === $siteRoot) {
             $this->addFlash('error', '[PM2] Site directory not found at /home/*/htdocs/' . $domainName);
             return $this->redirect($this->generateUrl('clp_sites'));
         }
